@@ -15,9 +15,11 @@ Also the mock point for tests/previews.
 (current conformance).
 
 **Gotchas**:
-- `PlaceSuggestion` text fields are Foundation `AttributedString` so SDK
-  match-highlighting survives without leaking a Google type; a plain-string
-  backend wraps with `AttributedString(_:)`.
+- `PlaceSuggestion` text fields are currently Foundation `AttributedString` so SDK
+  match-highlighting survives without leaking a Google type. **Phase 1 note:** the
+  savor-api backend drops highlighting (plain strings on the wire — see
+  savor-api/decisions.md), so when the migration lands these fields become plain
+  `String` and this `AttributedString` choice goes away.
 - Protocols can't declare default arguments — the `maxCount: 3` photo default
   lives in a protocol extension.
 - The two-tier cost model (cheap on save, expensive on demand) is part of the

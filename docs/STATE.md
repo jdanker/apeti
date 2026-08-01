@@ -14,9 +14,13 @@ _Last updated: 2026-07-20_
 
 ## Next
 1. Phase 1: `SavorAPIService: PlacesProviding` targeting savor-api endpoints
-2. Map savor-api JSON → `PlaceSuggestion` / `Restaurant` (see TODO: priceLevel wire format)
+2. Map savor-api JSON → `PlaceSuggestion` / `Restaurant`. Wire format decided
+   server-side: priceLevel nullable int, plain-string suggestion text (no highlighting),
+   photos as URIs. `PlaceSuggestion` can drop `AttributedString` → plain `String`.
 
 ## Landmines
 - No Discover/MapKit tab exists — old roadmap docs mentioning it are aspirational
 - Sort is a view projection; delete/reorder logic depends on stable IDs (see decisions.md)
 - Known bugs tracked in docs/TODO.md — check before touching AppState or DetailView
+- Phase 1 wire contract now lives in savor-api/docs (decisions.md + ARCHITECTURE Phase 1
+  API surface) — read it before writing `SavorAPIService`
