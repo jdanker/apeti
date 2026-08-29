@@ -57,7 +57,7 @@ Key invariants:
 - `LocationService.swift` — one-shot location via `CLLocationUpdate.liveUpdates`
 
 ### Storage/
-- `RestaurantStore.swift` — thin JSON wrapper (`Documents/restaurants.json` + `Documents/lists.json`), ISO-8601 dates; load failures return `[]`; directory injectable for tests
+- `RestaurantStore.swift` — thin JSON wrapper (`Documents/restaurants.json` + `Documents/lists.json`), ISO-8601 dates; decode failure quarantines the file (never overwritten by next save), missing file loads `[]`; directory injectable for tests
 
 ### Theme/
 - `SavorTheme.swift` — color palette, `SavorBackground`, `.savorCardStyle()` card modifier
@@ -67,6 +67,8 @@ Key invariants:
 - `SmartCategoryTests.swift` — classifier rules: type tables, priority order, price fallback
 - `SortOptionTests.swift` — shared sort projection: nil-sentinel ordering, no-location no-op
 - `AppStateListTests.swift` — list CRUD, membership integrity (dedupe, strip-on-delete), Smart Sort semantics (idempotent re-run, manual corrections survive, rename-safe), persistence reload
+- `PersistenceFixtures.swift` — APPEND-ONLY frozen JSON of every shipped on-disk format (v1.0/v1.1/v1.2, derived from git history); never edited to make a test pass
+- `PersistenceCompatibilityTests.swift` — the data-durability gate: every shipped format decodes losslessly, round-trips intact, tolerates unknown keys; corrupt files quarantined not lost
 
 ## Integration boundary (Phase 1 target)
 Today the app calls Google directly. Phase 1 replaces `PlacesService` with a

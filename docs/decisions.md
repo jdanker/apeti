@@ -64,3 +64,16 @@ moved Apple's own apps to an attached search tab, so a plain
 `Tab("Search", systemImage:)` now matches the platform look; the only cost is
 the circle-morph animation, which was the thing being removed. If Apple ships
 an attached mode for role-search tabs, revert to the role for the semantics.
+
+**2026-08 — Persistence compat is guarded by frozen fixtures, and corrupt files
+are quarantined instead of clobbered.** `PersistenceCompatibilityTests` decodes
+byte-frozen samples of every shipped on-disk format (v1.0/v1.1/v1.2, shapes
+recovered from git history, not memory) — fixtures are append-only so the test
+can never be "fixed" by regenerating them, which would make it tautological.
+Separately, `RestaurantStore.load()` previously swallowed decode errors and
+returned `[]`, which armed a time bomb: the next autosave would overwrite the
+user's only copy with an empty array. Load now distinguishes missing-file
+(clean first launch) from decode-failure, and quarantines an unreadable file to
+`*.corrupt-<epoch>` before returning empty — the data survives on disk for a
+fixed build to recover. Tests catch format breaks before shipping; quarantine
+bounds the damage of anything tests didn't foresee.

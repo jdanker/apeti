@@ -11,6 +11,22 @@ Claude as a learning-focused pair programmer. Rules:
 - Explain the *why* behind unfamiliar iOS/Swift tech — and record it in
   `docs/concepts/` so it survives the session.
 
+## Data durability invariant (never break this)
+
+An app update must NEVER lose a user's saved restaurants or lists. Persisted
+formats are forever — every JSON shape a shipped version ever wrote must decode
+in every future version. Concretely:
+
+- New fields on `Restaurant`/`RestaurantList` must be optional or defaulted.
+- Never remove or rename a `Codable` key or a persisted enum case
+  (`VisitStatus`, `SmartCategory`); adding cases is fine.
+- Storage filenames (`restaurants.json`, `lists.json`) and the ISO-8601 date
+  strategy never change without an explicit migration.
+- `SavorTests/PersistenceCompatibilityTests.swift` enforces this against frozen
+  per-version fixtures in `PersistenceFixtures.swift`. Fixtures are APPEND-ONLY:
+  if a compat test fails, fix the model — never edit a fixture to make it pass.
+  When a release changes the persisted format, freeze a new fixture for it.
+
 **Structure, invariants, and current state live in `docs/` — read before non-trivial work:**
 - `docs/ARCHITECTURE.md` — app structure, invariants, Code Map (every file, one line)
 - `docs/STATE.md` — where the project stands right now
