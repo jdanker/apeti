@@ -13,7 +13,7 @@ flowchart TD
     State --> Proto[PlacesProviding protocol]
     Proto --> Svc[PlacesService<br/>Google Places SDK impl]
     State --> Loc[LocationService<br/>one-shot fix]
-    App --> Tabs[RootTabView] --> Views[HomeListView / AddRestaurantView /<br/>RestaurantDetailView / PhotoCarouselView]
+    App --> Tabs[RootTabView<br/>Spots / Lists / Search tabs] --> Views[HomeListView / ListsTabView+ListDetailView /<br/>SearchTabView / AddRestaurantView /<br/>RestaurantDetailView / PhotoCarouselView]
     Views -->|read + call mutations| State
 ```
 
@@ -34,17 +34,22 @@ Key invariants:
 - `PrivacyInfo.xcprivacy` — privacy manifest (UserDefaults access reason only)
 
 ### Views/
-- `RootTabView.swift` — tab shell (currently List tab only)
-- `HomeListView.swift` — saved list; sort as a view-level projection (manual/price/rating/distance), swipe actions, drag-reorder (manual sort only), delete maps displayed offsets → stable IDs
+- `RootTabView.swift` — tab shell: Spots / Lists / Search (plain tab, deliberately not `role: .search` — see decisions.md), `.tabBarMinimizeBehavior(.onScrollDown)`
+- `HomeListView.swift` — Spots tab (all saved spots); defines `SortOption` + shared `apply` sort projection, swipe actions, drag-reorder (manual sort only), delete maps displayed offsets → stable IDs
+- `RestaurantRow.swift` — shared row card + common interactions (tap detail, Been swipe, `ListMembershipMenu` long-press); deletion stays with parents (meaning differs per surface)
+- `ListsTabView.swift` — Lists tab: overview, create/rename/delete, Smart Sort trigger; pushes detail by list *ID*
+- `ListDetailView.swift` — one list's spots; per-list manual reorder, swipe-delete = remove from list only
+- `SearchTabView.swift` — search tab content; local search over saved spots (name/type/summary), no API calls
 - `AddRestaurantView.swift` — search sheet; 300ms debounced autocomplete through AppState's shared service, viewState enum (idle/loading/error/noResults/results)
 - `RestaurantDetailView.swift` — detail sheet; lazy enrichment via `.task` + `needsRefresh`, fractional star rendering
 - `PhotoCarouselView.swift` — horizontal photo scroll; skips fetch for `preview.` placeIDs
 
 ### ViewModels/
-- `AppState.swift` — `@Observable @MainActor`; owns `[Restaurant]`, all mutations, autocomplete/photo passthroughs, distance-sort prep + coordinate backfill
+- `AppState.swift` — `@Observable @MainActor`; owns `[Restaurant]` + `[RestaurantList]`, all mutations (incl. list CRUD/membership + Smart Sort), autocomplete/photo passthroughs, distance-sort prep + coordinate backfill
 
 ### Models/
-- `Restaurant.swift` — the only domain model; Codable straight to JSON, type-display priority ranking, price/icon helpers, `needsRefresh`, preview data
+- `Restaurant.swift` — core domain model; Codable straight to JSON, type-display priority ranking, price/icon helpers, `needsRefresh`, preview data
+- `RestaurantList.swift` — named list (ordered `restaurantIDs: [UUID]`, membership by reference) + `SmartCategory` enum with rule-based classifier over Google types
 
 ### Services/
 - `PlacesProviding.swift` — protocol seam + `PlaceSuggestion` domain type; doc-comments the two-tier cost contract
@@ -52,10 +57,16 @@ Key invariants:
 - `LocationService.swift` — one-shot location via `CLLocationUpdate.liveUpdates`
 
 ### Storage/
-- `RestaurantStore.swift` — thin JSON wrapper (`Documents/restaurants.json`), ISO-8601 dates; load failures return `[]`
+- `RestaurantStore.swift` — thin JSON wrapper (`Documents/restaurants.json` + `Documents/lists.json`), ISO-8601 dates; load failures return `[]`; directory injectable for tests
 
 ### Theme/
 - `SavorTheme.swift` — color palette, `SavorBackground`, `.savorCardStyle()` card modifier
+
+### SavorTests/ (Swift Testing, not XCTest)
+- `TestSupport.swift` — fixtures (whole-second dates for ISO-8601 round-trips), temp-dir store factory, `MockPlacesService` (keeps Google SDK out of unit tests)
+- `SmartCategoryTests.swift` — classifier rules: type tables, priority order, price fallback
+- `SortOptionTests.swift` — shared sort projection: nil-sentinel ordering, no-location no-op
+- `AppStateListTests.swift` — list CRUD, membership integrity (dedupe, strip-on-delete), Smart Sort semantics (idempotent re-run, manual corrections survive, rename-safe), persistence reload
 
 ## Integration boundary (Phase 1 target)
 Today the app calls Google directly. Phase 1 replaces `PlacesService` with a

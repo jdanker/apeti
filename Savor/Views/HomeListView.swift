@@ -19,6 +19,30 @@ enum SortOption: String, CaseIterable, Identifiable {
         case .distance: return "location"
         }
     }
+
+    /// The shared sort projection, used by every surface that displays spots
+    /// (Spots tab, list detail). Pure — never mutates or persists; manual returns
+    /// the input order untouched.
+    func apply(to restaurants: [Restaurant], userLocation: CLLocation?) -> [Restaurant] {
+        switch self {
+        case .manual:
+            return restaurants
+        case .price:
+            // Cheapest first; nil (no price data from Google) maps to Int.max so
+            // unpriced restaurants sort last — same sentinel approach as distance.
+            return restaurants.sorted { ($0.priceLevel ?? Int.max) < ($1.priceLevel ?? Int.max) }
+        case .rating:
+            // Best first; unrated restaurants carry 0.0 so they naturally land last
+            return restaurants.sorted { $0.rating > $1.rating }
+        case .distance:
+            // Until the location fix arrives (or if denied), show the manual order
+            guard let here = userLocation else { return restaurants }
+            return restaurants.sorted {
+                ($0.distance(from: here) ?? .greatestFiniteMagnitude)
+                    < ($1.distance(from: here) ?? .greatestFiniteMagnitude)
+            }
+        }
+    }
 }
 
 struct HomeListView: View {
@@ -46,16 +70,18 @@ struct HomeListView: View {
 
                         Section("Saved Spots") {
                             ForEach(sortedRestaurants) { restaurant in
-                                restaurantRow(restaurant)
-                                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
-                                    .listRowSeparator(.hidden)
-                                    .listRowBackground(Color.clear)
-                                    // Reordering a sorted projection is meaningless (it would
-                                    // snap back), so drag-to-reorder only exists in manual order.
-                                    // moveDisabled (vs. a conditional onMove handler) also avoids
-                                    // an @MainActor function-conversion error under Swift 6.2's
-                                    // default-isolation settings.
-                                    .moveDisabled(sortOption != .manual)
+                                RestaurantRow(restaurant: restaurant) {
+                                    selectedRestaurant = restaurant
+                                }
+                                .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+                                // Reordering a sorted projection is meaningless (it would
+                                // snap back), so drag-to-reorder only exists in manual order.
+                                // moveDisabled (vs. a conditional onMove handler) also avoids
+                                // an @MainActor function-conversion error under Swift 6.2's
+                                // default-isolation settings.
+                                .moveDisabled(sortOption != .manual)
                             }
                             .onDelete(perform: delete)
                             .onMove(perform: state.move)
@@ -119,38 +145,14 @@ struct HomeListView: View {
         }
     }
 
-    // MARK: - Sorting
-
-    /// The list as displayed: a sorted projection over the persisted array.
-    /// Manual returns the stored order untouched; the persisted data is never re-sorted.
     private var sortedRestaurants: [Restaurant] {
-        switch sortOption {
-        case .manual:
-            return state.restaurants
-        case .price:
-            return state.restaurants.sorted(by: isOrderedByPrice)
-        case .rating:
-            // Best first; unrated restaurants carry 0.0 so they naturally land last
-            return state.restaurants.sorted { $0.rating > $1.rating }
-        case .distance:
-            // Until the location fix arrives (or if denied), show the manual order
-            guard let here = state.userLocation else { return state.restaurants }
-            return state.restaurants.sorted {
-                ($0.distance(from: here) ?? .greatestFiniteMagnitude)
-                    < ($1.distance(from: here) ?? .greatestFiniteMagnitude)
-            }
-        }
-    }
-
-    /// Comparator for price sort: cheapest first. nil (no price data from Google) maps
-    /// to Int.max so unpriced restaurants sort last — same sentinel approach as the
-    /// distance sort. Strict ordering: equal price levels return false.
-    private func isOrderedByPrice(_ a: Restaurant, _ b: Restaurant) -> Bool {
-        (a.priceLevel ?? Int.max) < (b.priceLevel ?? Int.max)
+        sortOption.apply(to: state.restaurants, userLocation: state.userLocation)
     }
 
     /// Swipe-to-delete hands us offsets into the *displayed* (sorted) array, which may
     /// not match the stored array's order — map to stable IDs before mutating.
+    /// Here in All Spots, delete means "delete everywhere" (and strips the spot from
+    /// every list); inside a list (ListDetailView) it only removes from that list.
     private func delete(atOffsets offsets: IndexSet) {
         let ids = offsets.map { sortedRestaurants[$0].id }
         for id in ids {
@@ -163,85 +165,6 @@ struct HomeListView: View {
             .font(.caption)
             .foregroundStyle(SavorTheme.mutedInk)
             .frame(maxWidth: .infinity, alignment: .center)
-    }
-
-    private func restaurantRow(_ restaurant: Restaurant) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(SavorTheme.accentSoft)
-
-                Image(systemName: restaurant.iconName)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.white)
-            }
-            .frame(width: 54, height: 54)
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(restaurant.name)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(SavorTheme.ink)
-                        .lineLimit(1)
-
-                    Spacer(minLength: 8)
-
-                    if !restaurant.priceLevelDisplay.isEmpty {
-                        Text(restaurant.priceLevelDisplay)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(SavorTheme.olive)
-                    }
-                }
-
-                HStack(spacing: 6) {
-                    Text(restaurant.primaryTypeDisplay.uppercased())
-                        .font(.caption.weight(.semibold))
-                        .tracking(0.6)
-                        .foregroundStyle(SavorTheme.mutedInk)
-
-                    Text("•")
-                        .foregroundStyle(SavorTheme.mutedInk.opacity(0.5))
-
-                    starRating(restaurant.rating)
-                }
-
-                if let summary = restaurant.editorialSummary, !summary.isEmpty {
-                    Text(summary)
-                        .font(.subheadline)
-                        .foregroundStyle(SavorTheme.mutedInk)
-                        .lineLimit(2)
-                }
-
-                HStack(spacing: 8) {
-                    if restaurant.visitStatus != .none {
-                        statusBadge(for: restaurant.visitStatus)
-                    }
-
-                    Text("Added \(restaurant.addedAt.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.caption)
-                        .foregroundStyle(SavorTheme.mutedInk.opacity(0.8))
-                }
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .savorCardStyle()
-        .onTapGesture {
-            selectedRestaurant = restaurant
-        }
-        .swipeActions(edge: .leading) {
-            Button {
-                let newStatus: VisitStatus = restaurant.visitStatus == .been ? .none : .been
-                state.updateVisitStatus(for: restaurant.id, status: newStatus)
-            } label: {
-                Label(
-                    restaurant.visitStatus == .been ? "Unmark" : "Been",
-                    systemImage: restaurant.visitStatus == .been ? "arrow.uturn.backward" : "checkmark.circle"
-                )
-            }
-            .tint(SavorTheme.olive)
-        }
     }
 
     private var emptyState: some View {
@@ -279,39 +202,6 @@ struct HomeListView: View {
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func starRating(_ rating: Double) -> some View {
-        HStack(spacing: 1) {
-            ForEach(1...5, id: \.self) { i in
-                Image(systemName: rating >= Double(i) - 0.25 ? "star.fill"
-                     : rating >= Double(i) - 0.75 ? "star.leadinghalf.filled"
-                     : "star")
-            }
-        }
-        .font(.caption2)
-        .foregroundStyle(SavorTheme.gold)
-    }
-
-    @ViewBuilder
-    private func statusBadge(for status: VisitStatus) -> some View {
-        let (icon, color) = statusIconAndColor(for: status)
-
-        Label(status.label, systemImage: icon)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(color)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(color.opacity(0.16), in: Capsule())
-    }
-
-    private func statusIconAndColor(for status: VisitStatus) -> (String, Color) {
-        switch status {
-        case .been:
-            return ("checkmark.circle.fill", SavorTheme.olive)
-        case .none:
-            return ("", .clear)
-        }
     }
 }
 

@@ -14,6 +14,7 @@ import UIKit
 @MainActor
 final class AppState {
     private(set) var restaurants: [Restaurant] = []
+    private(set) var lists: [RestaurantList] = []
 
     // MARK: - Manual Form Properties (legacy - can remove when autocomplete is complete)
     var draftPlaceID = ""
@@ -48,7 +49,10 @@ final class AppState {
         self.placesService = placesService ?? PlacesService()
     }
     
-    func load() { restaurants = store.load() }
+    func load() {
+        restaurants = store.load()
+        lists = store.loadLists()
+    }
     
     // Mutations
     func commitAdd() {
@@ -156,13 +160,116 @@ final class AppState {
     func remove(id: UUID) {
         restaurants.removeAll { $0.id == id }
         store.save(restaurants)
+        stripFromAllLists([id])
     }
-    
+
     func remove(atOffsets offsets: IndexSet) {
+        let removedIDs = offsets.map { restaurants[$0].id }
         for offset in offsets.sorted(by: >) {
             restaurants.remove(at: offset)
         }
         store.save(restaurants)
+        stripFromAllLists(removedIDs)
+    }
+
+    /// Lists hold references, so deleting a restaurant must clean up every list
+    /// that points at it — otherwise lists accumulate dangling IDs forever.
+    private func stripFromAllLists(_ ids: [UUID]) {
+        let removed = Set(ids)
+        var didUpdate = false
+        for index in lists.indices where !removed.isDisjoint(with: lists[index].restaurantIDs) {
+            lists[index].restaurantIDs.removeAll { removed.contains($0) }
+            didUpdate = true
+        }
+        if didUpdate { store.saveLists(lists) }
+    }
+
+    // MARK: - List Management
+
+    /// The restaurants in a list, in the list's own manual order. Dangling IDs
+    /// (shouldn't exist, but defensive) simply drop out of the projection.
+    func restaurants(in list: RestaurantList) -> [Restaurant] {
+        let byID = Dictionary(uniqueKeysWithValues: restaurants.map { ($0.id, $0) })
+        return list.restaurantIDs.compactMap { byID[$0] }
+    }
+
+    @discardableResult
+    func createList(name: String, iconName: String = "list.bullet") -> RestaurantList? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let list = RestaurantList(name: trimmed, iconName: iconName)
+        lists.append(list)
+        store.saveLists(lists)
+        return list
+    }
+
+    func renameList(id: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = lists.firstIndex(where: { $0.id == id }) else { return }
+        lists[index].name = trimmed
+        store.saveLists(lists)
+    }
+
+    /// Deletes the list only — the restaurants in it stay saved (they still live
+    /// in the main array and any other lists).
+    func deleteList(id: UUID) {
+        lists.removeAll { $0.id == id }
+        store.saveLists(lists)
+    }
+
+    func addRestaurant(_ restaurantID: UUID, toList listID: UUID) {
+        guard let index = lists.firstIndex(where: { $0.id == listID }),
+              !lists[index].restaurantIDs.contains(restaurantID) else { return }
+        lists[index].restaurantIDs.append(restaurantID)
+        store.saveLists(lists)
+    }
+
+    func removeRestaurant(_ restaurantID: UUID, fromList listID: UUID) {
+        guard let index = lists.firstIndex(where: { $0.id == listID }) else { return }
+        lists[index].restaurantIDs.removeAll { $0 == restaurantID }
+        store.saveLists(lists)
+    }
+
+    /// Reorders within one list's own ID array — the main restaurants array and
+    /// every other list are untouched.
+    func move(inList listID: UUID, fromOffsets source: IndexSet, toOffset destination: Int) {
+        guard let index = lists.firstIndex(where: { $0.id == listID }) else { return }
+        lists[index].restaurantIDs.move(fromOffsets: source, toOffset: destination)
+        store.saveLists(lists)
+    }
+
+    // MARK: - Smart Sort
+
+    /// Classifies saved restaurants into category lists (coffee/breakfast/lunch/
+    /// dinner/takeout), creating each category's list on first use.
+    ///
+    /// Manual corrections are respected: a restaurant already in *any* smart list
+    /// is skipped, so moving a misclassified spot from Dinner to Lunch survives
+    /// re-runs. Only spots in no smart list get classified. Runs entirely on
+    /// stored data — no API calls.
+    func runSmartSort() {
+        let alreadyFiled: Set<UUID> = Set(
+            lists.filter { $0.smartCategory != nil }.flatMap(\.restaurantIDs)
+        )
+
+        var didUpdate = false
+        for restaurant in restaurants where !alreadyFiled.contains(restaurant.id) {
+            let category = SmartCategory.classify(restaurant)
+
+            if let index = lists.firstIndex(where: { $0.smartCategory == category }) {
+                lists[index].restaurantIDs.append(restaurant.id)
+            } else {
+                lists.append(RestaurantList(
+                    name: category.displayName,
+                    iconName: category.iconName,
+                    restaurantIDs: [restaurant.id],
+                    smartCategory: category
+                ))
+            }
+            didUpdate = true
+        }
+        if didUpdate { store.saveLists(lists) }
     }
 
     func move(fromOffsets source: IndexSet, toOffset destination: Int) {
